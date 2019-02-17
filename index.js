@@ -1,334 +1,304 @@
 /**
  * @providesModule Notifications
+ * @flow
  */
 
-'use strict';
+"use strict";
 
-var RNNotificationsComponent = require( './component' );
+import { Platform } from "react-native";
+import { state as AppState, component as RNNotifications } from "./component";
+import {
+  type Notification,
+  type NotificationHandler,
+  type Permissions
+} from "./component/types";
 
-var AppState = RNNotificationsComponent.state;
-var RNNotifications = RNNotificationsComponent.component;
+export class Notifications {
+  handler: NotificationHandler = (RNNotifications: any);
+  onRegister: (({ token: string, os: string }) => void) | boolean = false;
+  onError: boolean = false;
+  onNotification: (Notification => void) | false = false;
+  onContentAvailableNotification: (Notification => void) | false = false;
+  isLoaded: boolean = false;
 
-var Platform = require('react-native').Platform;
+  isPermissionsRequestPending: boolean = false;
+  senderID: ?string = null;
 
-var Notifications = {
-	handler: RNNotifications,
-	onRegister: false,
-	onError: false,
-	onNotification: false,
-  onRemoteFetch: false,
-	isLoaded: false,
-	hasPoppedInitialNotification: false,
+  permissions: {
+    alert?: boolean,
+    badge?: boolean,
+    sound?: boolean
+  } = {
+    alert: true,
+    badge: true,
+    sound: true
+  };
 
-	isPermissionsRequestPending: false,
+  /**
+   * Configure local and remote notifications
+   * @param {Object}		options
+   * @param {function}	options.onRegister - Fired when the user registers for remote notifications.
+   * @param {function}	options.onNotification - Fired when a remote notification is received.
+   * @param {function} 	options.onError - None
+   * @param {Object}		options.permissions - Permissions list
+   * @param {Boolean}		options.requestPermissions - Check permissions when register
+   */
+  configure = (options: Object) => {
+    if (typeof options.onRegister !== "undefined") {
+      this.onRegister = options.onRegister;
+    }
 
-	permissions: {
-		alert: true,
-		badge: true,
-		sound: true
-	}
-};
+    if (typeof options.onError !== "undefined") {
+      this.onError = options.onError;
+    }
 
-Notifications.callNative = function(name: String, params: Array) {
-	if ( typeof this.handler[name] === 'function' ) {
-		if ( typeof params !== 'array' &&
-			 typeof params !== 'object' ) {
-			params = [];
-		}
+    if (typeof options.onNotification !== "undefined") {
+      this.onNotification = options.onNotification;
+    }
 
-		return this.handler[name](...params);
-	} else {
-		return null;
-	}
-};
+    if (typeof options.permissions !== "undefined") {
+      this.permissions = options.permissions;
+    }
 
-/**
- * Configure local and remote notifications
- * @param {Object}		options
- * @param {function}	options.onRegister - Fired when the user registers for remote notifications.
- * @param {function}	options.onNotification - Fired when a remote notification is received.
- * @param {function} 	options.onError - None
- * @param {Object}		options.permissions - Permissions list
- * @param {Boolean}		options.requestPermissions - Check permissions when register
- */
-Notifications.configure = function(options: Object) {
-	if ( typeof options.onRegister !== 'undefined' ) {
-		this.onRegister = options.onRegister;
-	}
+    if (typeof options.senderID !== "undefined") {
+      this.senderID = options.senderID;
+    }
 
-	if ( typeof options.onError !== 'undefined' ) {
-		this.onError = options.onError;
-	}
+    if (typeof options.onContentAvailableNotification !== "undefined") {
+      this.onContentAvailableNotification =
+        options.onContentAvailableNotification;
+    }
 
-	if ( typeof options.onNotification !== 'undefined' ) {
-		this.onNotification = options.onNotification;
-	}
+    if (this.isLoaded === false) {
+      this.handler.addEventListener("register", this._onRegister);
+      this.handler.addEventListener("notification", this._onNotification);
+      this.handler.addEventListener(
+        "contentAvailableNotification",
+        this._onContentAvailableNotification
+      );
 
-	if ( typeof options.permissions !== 'undefined' ) {
-		this.permissions = options.permissions;
-	}
+      this.isLoaded = true;
+    }
 
-	if ( typeof options.senderID !== 'undefined' ) {
-		this.senderID = options.senderID;
-	}
+    if (options.requestPermissions !== false) {
+      this._requestPermissions();
+    }
+  };
 
-	if ( typeof options.onRemoteFetch !== 'undefined' ) {
-		this.onRemoteFetch = options.onRemoteFetch;
-	}
+  /* Unregister */
+  unregister = function() {
+    this.handler.removeEventListener("register", this._onRegister);
+    this.handler.removeEventListener("notification", this._onNotification);
+    this.handler.removeEventListener(
+      "contentAvailableNotification",
+      this._onContentAvailableNotification
+    );
+    this.isLoaded = false;
+  };
 
-	if ( this.isLoaded === false ) {
-		this._onRegister = this._onRegister.bind(this);
-		this._onNotification = this._onNotification.bind(this);
-		this._onRemoteFetch = this._onRemoteFetch.bind(this);
-		this.callNative( 'addEventListener', [ 'register', this._onRegister ] );
-		this.callNative( 'addEventListener', [ 'notification', this._onNotification ] );
-		this.callNative( 'addEventListener', [ 'localNotification', this._onNotification ] );
-		Platform.OS === 'android' ? this.callNative( 'addEventListener', [ 'remoteFetch', this._onRemoteFetch ] ) : null
+  /**
+   * Local Notifications
+   * @param {Object}		details
+   * @param {String}		details.title  -  The title displayed in the notification alert.
+   * @param {String}		details.message - The message displayed in the notification alert.
+   * @param {String}		details.ticker -  ANDROID ONLY: The ticker displayed in the status bar.
+   * @param {Object}		details.userInfo -  iOS ONLY: The userInfo used in the notification alert.
+   */
+  localNotification = (details: Object) => {
+    if (Platform.OS === "ios") {
+      // https://developer.apple.com/reference/uikit/uilocalnotification
 
-		this.isLoaded = true;
-	}
+      let soundName = details.soundName ? details.soundName : "default"; // play sound (and vibrate) as default behaviour
 
-	if ( this.hasPoppedInitialNotification === false &&
-			( options.popInitialNotification === undefined || options.popInitialNotification === true ) ) {
-		this.popInitialNotification(function(firstNotification) {
-			if ( firstNotification !== null ) {
-				this._onNotification(firstNotification, true);
-			}
-		}.bind(this));
-		this.hasPoppedInitialNotification = true;
-	}
+      if (details.hasOwnProperty("playSound") && !details.playSound) {
+        soundName = ""; // empty string results in no sound (and no vibration)
+      }
 
-	if ( options.requestPermissions !== false ) {
-		this._requestPermissions();
-	}
+      // for valid fields see: https://developer.apple.com/library/ios/documentation/NetworkingInternet/Conceptual/RemoteNotificationsPG/Chapters/IPhoneOSClientImp.html
+      // alertTitle only valid for apple watch: https://developer.apple.com/library/ios/documentation/iPhone/Reference/UILocalNotification_Class/#//apple_ref/occ/instp/UILocalNotification/alertTitle
 
-};
+      this.handler.presentLocalNotification({
+        alertTitle: details.title,
+        alertBody: details.message,
+        alertAction: details.alertAction,
+        category: details.category,
+        soundName: soundName,
+        applicationIconBadgeNumber: details.number,
+        userInfo: details.userInfo
+      });
+    } else {
+      this.handler.presentLocalNotification(details);
+    }
+  };
 
-/* Unregister */
-Notifications.unregister = function() {
-	this.callNative( 'removeEventListener', [ 'register', this._onRegister ] )
-	this.callNative( 'removeEventListener', [ 'notification', this._onNotification ] )
-	this.callNative( 'removeEventListener', [ 'localNotification', this._onNotification ] )
-	Platform.OS === 'android' ? this.callNative( 'removeEventListener', [ 'remoteFetch', this._onRemoteFetch ] ) : null
-	this.isLoaded = false;
-};
+  /**
+   * Local Notifications Schedule
+   * @param {Object}		details (same as localNotification)
+   * @param {Date}		details.date - The date and time when the system should deliver the notification
+   */
+  localNotificationSchedule = (details: Object) => {
+    if (Platform.OS === "ios") {
+      let soundName = details.soundName ? details.soundName : "default"; // play sound (and vibrate) as default behaviour
 
-/**
- * Local Notifications
- * @param {Object}		details
- * @param {String}		details.title  -  The title displayed in the notification alert.
- * @param {String}		details.message - The message displayed in the notification alert.
- * @param {String}		details.ticker -  ANDROID ONLY: The ticker displayed in the status bar.
- * @param {Object}		details.userInfo -  iOS ONLY: The userInfo used in the notification alert.
- */
-Notifications.localNotification = function(details: Object) {
-	if ( Platform.OS === 'ios' ) {
-		// https://developer.apple.com/reference/uikit/uilocalnotification
+      if (details.hasOwnProperty("playSound") && !details.playSound) {
+        soundName = ""; // empty string results in no sound (and no vibration)
+      }
 
-		let soundName = details.soundName ? details.soundName : 'default'; // play sound (and vibrate) as default behaviour
+      const iosDetails = {
+        fireDate: details.date.toISOString(),
+        alertTitle: details.title,
+        alertBody: details.message,
+        category: details.category,
+        soundName: soundName,
+        userInfo: details.userInfo,
+        repeatInterval: details.repeatType,
+        applicationIconBadgeNumber: undefined
+      };
 
-		if (details.hasOwnProperty('playSound') && !details.playSound) {
-			soundName = ''; // empty string results in no sound (and no vibration)
-		}
+      if (details.number) {
+        iosDetails.applicationIconBadgeNumber = parseInt(details.number, 10);
+      }
 
-		// for valid fields see: https://developer.apple.com/library/ios/documentation/NetworkingInternet/Conceptual/RemoteNotificationsPG/Chapters/IPhoneOSClientImp.html
-		// alertTitle only valid for apple watch: https://developer.apple.com/library/ios/documentation/iPhone/Reference/UILocalNotification_Class/#//apple_ref/occ/instp/UILocalNotification/alertTitle
+      // ignore Android only repeatType
+      if (!details.repeatType || details.repeatType === "time") {
+        delete iosDetails.repeatInterval;
+      }
+      this.handler.scheduleLocalNotification(iosDetails);
+    } else {
+      details.fireDate = details.date.getTime();
+      delete details.date;
+      // ignore iOS only repeatType
+      if (["year", "month"].includes(details.repeatType)) {
+        delete details.repeatType;
+      }
+      this.handler.scheduleLocalNotification(details);
+    }
+  };
 
-		this.handler.presentLocalNotification({
-			alertTitle: details.title,
-			alertBody: details.message,
-			alertAction: details.alertAction,
-			category: details.category,
-			soundName: soundName,
-			applicationIconBadgeNumber: details.number,
-			userInfo: details.userInfo
-		});
-	} else {
-		this.handler.presentLocalNotification(details);
-	}
-};
+  /* Internal Functions */
+  _onRegister = (token: string) => {
+    const onRegister = this.onRegister;
+    if (typeof onRegister === "function") {
+      onRegister({
+        token: token,
+        os: Platform.OS
+      });
+    }
+  };
 
-/**
- * Local Notifications Schedule
- * @param {Object}		details (same as localNotification)
- * @param {Date}		details.date - The date and time when the system should deliver the notification
- */
-Notifications.localNotificationSchedule = function(details: Object) {
-	if ( Platform.OS === 'ios' ) {
-		let soundName = details.soundName ? details.soundName : 'default'; // play sound (and vibrate) as default behaviour
+  _onContentAvailableNotification = (notificationData: Object) => {
+    if (this.onContentAvailableNotification !== false) {
+      this.onContentAvailableNotification(notificationData);
+    }
+  };
 
-		if (details.hasOwnProperty('playSound') && !details.playSound) {
-			soundName = ''; // empty string results in no sound (and no vibration)
-		}
+  _onNotification = (data: Object) => {
+    if (this.onNotification !== false) {
+      this.onNotification(data);
+    }
+  };
 
-		const iosDetails = {
-			fireDate: details.date.toISOString(),
-			alertTitle: details.title,
-			alertBody: details.message,
-			category: details.category,
-			soundName: soundName,
-			userInfo: details.userInfo,
-			repeatInterval: details.repeatType
-		};
+  /* onResultPermissionResult */
+  _onPermissionResult = function() {
+    this.isPermissionsRequestPending = false;
+  };
 
-		if(details.number) {
-			iosDetails.applicationIconBadgeNumber = parseInt(details.number, 10);
-		}
+  // Prevent requestPermissions called twice if ios result is pending
+  _requestPermissions = function() {
+    if (Platform.OS === "ios") {
+      if (
+        typeof this.handler.requestPermissions === "function" &&
+        this.isPermissionsRequestPending === false
+      ) {
+        this.isPermissionsRequestPending = true;
+        const promise = this.handler
+          .requestPermissions(this.permissions)
+          .then(this._onPermissionResult.bind(this))
+          .catch(this._onPermissionResult.bind(this));
+      }
+    } else if (
+      this.senderID != null &&
+      typeof this.handler.registerService === "function"
+    ) {
+      return this.handler.registerService(this.senderID);
+    }
+  };
 
-		// ignore Android only repeatType
-		if (!details.repeatType || details.repeatType === 'time') {
-			delete iosDetails.repeatInterval;
-		}
-		this.handler.scheduleLocalNotification(iosDetails);
-	} else {
-		details.fireDate = details.date.getTime();
-		delete details.date;
-		// ignore iOS only repeatType
-		if (['year', 'month'].includes(details.repeatType)) {
-			delete details.repeatType;
-		}
-		this.handler.scheduleLocalNotification(details);
-	}
-};
+  // Stock requestPermissions function
+  requestPermissions = function() {
+    if (typeof this.handler.requestPermissions === "function") {
+      return this.handler.requestPermissions(this.permissions);
+    } else if (
+      this.senderID != null &&
+      typeof this.handler.registerService === "function"
+    ) {
+      return this.handler.registerService(this.senderID);
+    }
+  };
 
-/* Internal Functions */
-Notifications._onRegister = function(token: String) {
-	if ( this.onRegister !== false ) {
-		this.onRegister({
-			token: token,
-			os: Platform.OS
-		});
-	}
-};
+  /* Fallback functions */
+  subscribeToTopic = function(topic: Object) {
+    return this.handler.subscribeToTopic(topic);
+  };
 
-Notifications._onRemoteFetch = function(notificationData: Object) {
-	if ( this.onRemoteFetch !== false ) {
-		this.onRemoteFetch(notificationData)
-	}
-};
+  presentLocalNotification = function(notification: Object) {
+    return this.handler.presentLocalNotification(notification);
+  };
 
-Notifications._onNotification = function(data, isFromBackground = null) {
-	if ( isFromBackground === null ) {
-		isFromBackground = (
-			data.foreground === false ||
-			AppState.currentState === 'background'
-		);
-	}
+  scheduleLocalNotification = function(notification: Object) {
+    return this.handler.scheduleLocalNotification(notification);
+  };
 
-	if ( this.onNotification !== false ) {
-		if ( Platform.OS === 'ios' ) {
-			this.onNotification({
-				foreground: ! isFromBackground,
-				userInteraction: isFromBackground,
-				message: data.getMessage(),
-				data: data.getData(),
-				badge: data.getBadgeCount(),
-				alert: data.getAlert(),
-				sound: data.getSound(),
-  			finish: (res) => data.finish(res)
-			});
-		} else {
-			var notificationData = {
-				foreground: ! isFromBackground,
-  			finish: () => {},
-				...data
-			};
+  cancelLocalNotifications = function(notification: Object) {
+    return this.handler.cancelLocalNotifications(notification);
+  };
 
-			if ( typeof notificationData.data === 'string' ) {
-				try {
-					notificationData.data = JSON.parse(notificationData.data);
-				} catch(e) {
-					/* void */
-				}
-			}
+  clearLocalNotification = function(notification: Object) {
+    return this.handler.clearLocalNotifications(notification);
+  };
 
-			this.onNotification(notificationData);
-		}
-	}
-};
+  cancelAllLocalNotifications = function() {
+    return this.handler.cancelAllLocalNotifications();
+  };
 
-/* onResultPermissionResult */
-Notifications._onPermissionResult = function() {
-	this.isPermissionsRequestPending = false;
-};
+  setApplicationIconBadgeNumber = function(badgeNumber: number) {
+    return this.handler.setApplicationIconBadgeNumber(badgeNumber);
+  };
 
-// Prevent requestPermissions called twice if ios result is pending
-Notifications._requestPermissions = function() {
-	if ( Platform.OS === 'ios' ) {
-		if ( this.isPermissionsRequestPending === false ) {
-			this.isPermissionsRequestPending = true;
-			return this.callNative( 'requestPermissions', [ this.permissions ])
-							.then(this._onPermissionResult.bind(this))
-							.catch(this._onPermissionResult.bind(this));
-		}
-	} else if ( typeof this.senderID !== 'undefined' ) {
-		return this.callNative( 'requestPermissions', [ this.senderID ]);
-	}
-};
+  getApplicationIconBadgeNumber = function(): Promise<number> {
+    return this.handler.getApplicationIconBadgeNumber();
+  };
 
-// Stock requestPermissions function
-Notifications.requestPermissions = function() {
-	if ( Platform.OS === 'ios' ) {
-		return this.callNative( 'requestPermissions', [ this.permissions ]);
-	} else if ( typeof this.senderID !== 'undefined' ) {
-		return this.callNative( 'requestPermissions', [ this.senderID ]);
-	}
-};
+  // pops the initial notification and calls the handler when it is complete
+  // notifications are received via the onNotification callback
+  popInitialNotification = (handler: () => void) => {
+    const onInitialNotification = this._onNotification;
+    this.handler.getInitialNotification().then(function(result: ?Object) {
+      if (result != null) {
+        onInitialNotification(result);
+      }
+      if (typeof handler === "function") {
+        handler();
+      }
+    });
+  };
 
-/* Fallback functions */
-Notifications.subscribeToTopic = function() {
-	return this.callNative('subscribeToTopic', arguments);
-};
+  abandonPermissions = function() {
+    return this.handler.abandonPermissions();
+  };
 
-Notifications.presentLocalNotification = function() {
-	return this.callNative('presentLocalNotification', arguments);
-};
+  checkPermissions = function(callback: Permissions => void) {
+    return this.handler.checkPermissions(callback);
+  };
 
-Notifications.scheduleLocalNotification = function() {
-	return this.callNative('scheduleLocalNotification', arguments);
-};
+  registerNotificationActions = function(actions: string[]) {
+    return this.handler.registerNotificationActions(actions);
+  };
 
-Notifications.cancelLocalNotifications = function() {
-	return this.callNative('cancelLocalNotifications', arguments);
-};
-
-Notifications.clearLocalNotification = function() {
-    return this.callNative('clearLocalNotification', arguments);
-};
-
-Notifications.cancelAllLocalNotifications = function() {
-	return this.callNative('cancelAllLocalNotifications', arguments);
-};
-
-Notifications.setApplicationIconBadgeNumber = function() {
-	return this.callNative('setApplicationIconBadgeNumber', arguments);
-};
-
-Notifications.getApplicationIconBadgeNumber = function() {
-	return this.callNative('getApplicationIconBadgeNumber', arguments);
-};
-
-Notifications.popInitialNotification = function(handler) {
-	this.callNative('getInitialNotification').then(function(result){
-		handler(result);
-	});
-};
-
-Notifications.abandonPermissions = function() {
-	return this.callNative('abandonPermissions', arguments);
-};
-
-Notifications.checkPermissions = function() {
-	return this.callNative('checkPermissions', arguments);
-};
-
-Notifications.registerNotificationActions = function() {
-	return this.callNative('registerNotificationActions', arguments)
+  nativeNotificationSchedule = function(request: Object) {
+    // Only available for iOS
+    return this.handler.addNotificationRequest(request);
+  };
 }
 
-Notifications.clearAllNotifications = function() {
-	// Only available for Android
-	return this.callNative('clearAllNotifications', arguments)
-}
-
-module.exports = Notifications;
+export default new Notifications();

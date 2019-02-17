@@ -30,17 +30,8 @@ public class RNPushNotificationListenerService extends FirebaseMessagingService 
     @Override
     public void onMessageReceived(RemoteMessage message) {
         String from = message.getFrom();
-        RemoteMessage.Notification remoteNotification = message.getNotification();
 
         final Bundle bundle = new Bundle();
-        // Putting it from remoteNotification first so it can be overriden if message
-        // data has it
-        if (remoteNotification != null) {
-            // ^ It's null when message is from GCM
-            bundle.putString("title", remoteNotification.getTitle());
-            bundle.putString("message", remoteNotification.getBody());
-        }
-
         for(Map.Entry<String, String> entry : message.getData().entrySet()) {
             bundle.putString(entry.getKey(), entry.getValue());
         }
@@ -63,6 +54,7 @@ public class RNPushNotificationListenerService extends FirebaseMessagingService 
             if (!bundle.containsKey("color")) {
                 bundle.putString("color", data.optString("color", null));
             }
+            bundle.putString("notificationType", "Android-userNotification");
 
             final int badge = data.optInt("badge", -1);
             if (badge >= 0) {
@@ -125,7 +117,7 @@ public class RNPushNotificationListenerService extends FirebaseMessagingService 
 
         // If contentAvailable is set to true, then send out a remote fetch event
         if (bundle.getString("contentAvailable", "false").equalsIgnoreCase("true")) {
-            jsDelivery.notifyRemoteFetch(bundle);
+            jsDelivery.notifyContentAvailableNotification(bundle);
         }
 
         Log.v(LOG_TAG, "sendNotification: " + bundle);
